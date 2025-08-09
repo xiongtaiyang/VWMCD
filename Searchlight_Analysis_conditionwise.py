@@ -7,7 +7,7 @@ from nilearn.decoding import SearchLight  # Searchlight analysis
 from sklearn.svm import SVC  # Support Vector Classifier
 from sklearn.model_selection import StratifiedKFold  # Cross-validation
 from nilearn import plotting  # Brain visualization
-
+from sklearn.model_selection import RepeatedKFold
 # Load fMRI data and brain mask
 fmri_img = nib.load('fmri_data.nii')  # 4D fMRI data (space × time)
 mask_img = nib.load('brain_mask.nii.gz')  # Brain parcellation map
