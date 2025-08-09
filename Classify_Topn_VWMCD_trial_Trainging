@@ -1,0 +1,155 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+Created on Thu May 29 16:13:21 2025
+
+@author: ubuntu
+"""
+
+import numpy as np
+from tqdm import tqdm
+import os
+import pandas as pd
+from sklearn.svm import SVC
+from sklearn.metrics import accuracy_score, confusion_matrix, roc_curve, auc
+from load_mat_data import load_mat_data
+from plot_confusion_matrix_new import plot_confusion_matrix
+import pickle
+from Repeat_k_fold_cv import Repeat_k_fold_cv
+from plot_multiclass_roc_curve import plot_multiclass_roc_curve
+# 文件路径设置
+matfile_path = r"HCP_FeatureMatrix_Trial_GrayMask_Canlab.mat"
+
+pattern = load_mat_data('VWMCM_dat.mat','VWMCM_FDR_05_SVC_Conda_linear_boot10000')
+# 计算 mask 数值的百分位数
+percentiles = [0,10,20,30,40,50,60,70,80,90,95,96,97,98,99]
+output_basepath = r"Topn_new"
+
+feature_matrix_orig = load_mat_data(matfile_path,'data_matrix')
+
+
+# 生成被试分组标识（每4个样本属于同一被试）
+subjects = list(range(0, 561))
+labels = np.array([1] * 20 + [2] * 20 + [3] * 20 + [4] * 20)
+
+# Train the SVM classifier
+#svm = SVC(kernel='rbf',C=1,gamma='scale', probability=True)
+svm = SVC(kernel='linear',C=1, probability=True)
+for percentile in percentiles: 
+ 
+    threshold_pos = np.percentile(pattern, percentile)
+    threshold_neg = np.percentile(pattern, 100-percentile)
+    # 创建新的掩膜：选择大于当前阈值的体素
+    #selected_features_index = (pattern[:, 0] >= threshold_pos) | (pattern[:, 0] <= threshold_neg)
+    selected_features_index = (pattern[:, 0] >= threshold_pos)
+
+    print(f"Running Leave-One-Out for Top {percentile}% voxels of Mask ")
+    output_path = os.path.join(output_basepath, f"Top_{100-percentile}")
+    os.makedirs(output_path, exist_ok=True)  # 创建输出目录
+     
+    # 特征选择
+    feature_matrix = feature_matrix_orig[:, selected_features_index]
+    # Initialize variables to store results for the ROC curve
+    tprs = []
+    fprs = []
+    y_true_labels = []
+    roc_aucs = []
+    y_test_binarized=[]
+    y_score=[]
+    y_pred_labels=[]
+    model_results=[]
+    std_accs=[]
+    mean_accs=[]
+    # 主循环（使用tqdm包装交叉验证过程）
+    for subj_idx in tqdm(range(len(subjects)), desc="Processing Subjects"):
+        # 手动创建mask选择被试
+        feature_matrix_subj = feature_matrix[subj_idx*80:subj_idx*80+80,:] 
+         
+        # 执行十折交叉验证
+        results = Repeat_k_fold_cv(feature_matrix_subj, labels, groups=None, model=svm, repeat_times=100, n_jobs=10, random_state=10)
+        y_true_labels.append(results['y_true'])
+        y_pred_labels.append(results['y_pred'])
+        y_test_binarized.append(results['y_true_binarized'])
+        y_score.append(results['y_score'])
+        model_results.append(results)
+        std_accs.append(results['std_accuracy'])
+        mean_accs.append(results['mean_accuracy'])
+    
+    y_pred_labels = np.hstack(y_pred_labels)
+    y_true_labels = np.hstack(y_true_labels)
+    y_test_binarized = np.vstack(y_test_binarized)
+    y_score = np.vstack(y_score)
+    std_accs = np.vstack(std_accs)
+    # 计算混淆矩阵
+    conf_matrix = confusion_matrix(y_true_labels, y_pred_labels)
+        
+    accuracies = accuracy_score(y_true_labels,y_pred_labels)
+    
+    n_classes = y_test_binarized.shape[1]
+    for i in range(n_classes):
+        fpr, tpr, _ = roc_curve(y_test_binarized[:, i], y_score[:, i])
+        tprs.append(tpr)
+        fprs.append(fpr)
+        roc_auc = auc(fpr, tpr)
+        roc_aucs.append(roc_auc)
+    
+    # Compute mean accuracy
+    mean_accuracy = np.mean(accuracies)
+    std_accuracy = np.mean(std_accs)
+
+
+    # save the main results
+    print(f"Mean Accuracy: {mean_accuracy:.4f} ± {std_accuracy:.4f}")
+    final_results = pd.DataFrame({
+    'Mean Accuracy': accuracies,
+    'Mean AUC': roc_auc,
+    'Std Acc':std_accuracy
+    }, index=[0])
+    final_results.to_csv(os.path.join(output_path, 'overall_results_linear_10folds.csv'), index=False)
+    
+    # Plot figure
+    colors = ['#FFBC00','#92D050','#A076A1','#F58A83']
+    class_names = ['Body', 'Face', 'Place', 'Tool']
+
+    # Plot ROC curve
+    plot_multiclass_roc_curve(y_test_binarized, 
+                              y_score,
+                              class_names, 
+                            colors, figsize=(6, 6), 
+                            font_family='Arial', 
+                            save_filename=f'Training_roc_curve_linear_trial_topbottom{percentile}.png')
+
+    # Plot Confusion Matrix
+    # 计算百分比矩阵
+    conf_matrix_percent = conf_matrix / conf_matrix.sum(axis=1, keepdims=True) * 100
+    
+    # 保存主要的分类结果
+    save_results = {
+    "FPRs": fprs,
+    "TPRs": tprs,
+    "MeanAccuracy": mean_accuracy,
+    "StdAccuracy":std_accuracy,
+    "PredictedLabels": y_pred_labels,
+    "TrueLabels": y_true_labels,
+    "ROC_AUCs": roc_aucs,
+    "ConfusionMatrix_Percent": conf_matrix_percent,
+    "ConfusionMatrix": conf_matrix,
+    "y_test_binarized":y_test_binarized,
+    "y_score":y_score
+    }
+    with open(os.path.join(output_path,"model_results_linear.pkl"), "wb") as f:
+         pickle.dump(save_results, f)
+    
+    
+    savefile_name = os.path.join(output_path,f'Training_ConfusionMatrix_trial_topbottom{percentile}_linear.png')
+    # 绘制混淆矩阵
+    plot_confusion_matrix(conf_matrix=conf_matrix_percent,
+                          savefile_name=savefile_name,
+                          class_labels=class_names)
+  
+    
+
+
+    
+
+    
