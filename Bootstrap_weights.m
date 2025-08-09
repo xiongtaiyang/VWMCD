@@ -1,31 +1,55 @@
+% Clear command window and workspace
 clc
 clear
 
+% Load fMRI data matrix from a .mat file
 load('data_matrix.mat');
-dat = fmri_data('E:\HCP\WM-Getm-over\FunImg\group\cond_diff_diff\100206_cond_0001.nii','E:\HCP\WM-Getm-over\Schaefer_atlas\rschaefer400MNI.nii');
-label = repmat([1:4]',[700,1]);
 
+% Create an fmri_data object using a template image ('template.nii') 
+% and a mask image ('mask.nii') that defines the brain regions of interest
+dat = fmri_data('template.nii', 'mask.nii');
+
+% Create class labels for all samples (each class repeated 700 times)
+% The dataset has 4 classes, creating a label vector of 2800 samples (700×4)
+label = repmat([1:4]', [700, 1]);
+
+% Assign labels to the fmri_data object
 dat.Y = label;
+
+% Assign fMRI data matrix to dat.dat (transpose needed for proper orientation)
+% Rows become voxels, columns become samples
 dat.dat = data_matrix';
+
+% Initialize random number generator with seed 20 for reproducibility
 rng(20, 'twister'); 
 
-% 生成被试ID（每个被试重复4次）
-subjIDs = repelem(1:701, 4);  % 700个被试，每个被试4个样本
+% Generate subject IDs: each subject has 4 consecutive samples
+subjIDs = repelem(1:700, 4);  % Creating 700 subjects × 4 = 2800 samples
 
-% 手动生成被试级别的5折交叉验证
-unique_subjects = unique(subjIDs);  % 唯一被试列表
-num_subjects = length(unique_subjects);  % 被试总数
-num_folds = 10;
+% Set up subject-level 10-fold cross-validation
+unique_subjects = unique(subjIDs);  % Get list of unique subject IDs
+num_subjects = length(unique_subjects);  % Total number of subjects (700)
+num_folds = 10;  % Number of folds for cross-validation
 
-% 随机将被试分配到5个折叠中（确保每个被试属于唯一折叠）
-rng(42);  % 固定随机种子以保证可重复性
-subjects_folds = crossvalind('KFold', num_subjects, num_folds);  % 被试级别的折叠分配
+% Set random seed for fold assignment reproducibility
+rng(42);  
+% Assign subjects to folds (subject-level assignment)
+subjects_folds = crossvalind('KFold', num_subjects, num_folds);  
 
-% 将被试的折叠编号映射到所有样本
+% Map subject-level fold assignments to individual samples
+% Create fold index vector for all 2800 samples
 nfolds = zeros(size(subjIDs));
 for i = 1:num_subjects
     subj = unique_subjects(i);
-    idx = (subjIDs == subj);  % 当前被试的所有样本索引
-    nfolds(idx) = subjects_folds(i);  % 样本继承被试的折叠编号
+    idx = (subjIDs == subj);  % Find indices for all samples from this subject
+    nfolds(idx) = subjects_folds(i);  % Assign same fold to all samples of this subject
 end
-[cverr, stats_boot, optout] = predict(dat, 'algorithm_name', 'cv_svm','nfolds', 10, 'error_type', 'mse', 'useparallel', 1, 'bootweights', 'bootsamples', 10000);
+
+% Run SVM classification with cross-validation and bootstrap statistics
+[cverr, stats_boot, optout] = predict(dat, ...
+    'algorithm_name', 'cv_svm', ... % Use SVM classifier
+    'nfolds', 10, ...              % 10-fold cross-validation
+    'error_type', 'mse', ...        % Evaluate using mean squared error
+    'useparallel', 1, ...          % Enable parallel processing
+    'bootweights', ...              % Bootstrap weight maps
+    'bootsamples', 10000);          % Use 10,000 bootstrap samples
