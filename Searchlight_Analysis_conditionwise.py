@@ -21,7 +21,9 @@ n_jobs = -1  # Use all CPU cores
 labels = np.array([1,2,3,4]*561)  # Conditions: Body, Face, Place, Tool
 
 # Configure stratified 10-fold cross-validation
-cv = StratifiedKFold(n_splits=10)  # Balanced class distribution in folds
+#cv = StratifiedKFold(n_splits=10)  # Balanced class distribution in folds
+cv = RepeatedKFold(n_splits=10, n_repeats=10, random_state=42)
+
 
 # Process brain mask to binary format
 mask_data = mask_img.get_fdata()  # Load voxel data
